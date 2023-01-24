@@ -6,7 +6,8 @@ import argparse
 from networks.vision_transformer import SwinUnet as ViT_seg
 from networks.config import get_config
 from networks.nnunet import initialize_network
-from networks.FPN import FPN
+from networks.FPN1 import FPN1
+from networks.FPN2 import FPN2
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--root_path', type=str,
@@ -93,8 +94,10 @@ def net_factory(net_type="unet", in_chns=1, class_num=3):
         net = PNet2D(in_chns, class_num, 64, [1, 2, 4, 8, 16]).cuda()
     elif net_type == "nnUNet":
         net = initialize_network(num_classes=class_num).cuda()
-    elif net_type == 'fpn':
-        net= FPN().cuda()
+    elif net_type == 'fpn1':
+        net= FPN1().cuda()
+    elif net_type == 'fpn2':
+        net= FPN2().cuda()
     else:
         net = None
     return net

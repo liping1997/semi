@@ -21,7 +21,7 @@ from torchvision.utils import make_grid
 from tqdm import tqdm
 
 from dataloaders import utils
-from dataloaders.dataset import (BaseDataSets, RandomGenerator,
+from dataloaders.dataset import (BaseDataSets1, RandomGenerator,
                                  TwoStreamBatchSampler)
 from networks.net_factory import net_factory
 from utils import losses, metrics, ramps
@@ -36,7 +36,7 @@ parser.add_argument('--model', type=str,
                     default='unet', help='model_name')
 parser.add_argument('--max_iterations', type=int,
                     default=30000, help='maximum epoch number to train')
-parser.add_argument('--batch_size', type=int, default=24,
+parser.add_argument('--batch_size', type=int, default=8,
                     help='batch_size per gpu')
 parser.add_argument('--deterministic', type=int,  default=1,
                     help='whether use deterministic training')
@@ -49,7 +49,7 @@ parser.add_argument('--num_classes', type=int,  default=4,
                     help='output channel of network')
 
 # label and unlabel
-parser.add_argument('--labeled_bs', type=int, default=12,
+parser.add_argument('--labeled_bs', type=int, default=4,
                     help='labeled_batch_size per gpu')
 parser.add_argument('--labeled_num', type=int, default=136,
                     help='labeled data')
@@ -110,22 +110,25 @@ def train(args, snapshot_path):
     def worker_init_fn(worker_id):
         random.seed(args.seed + worker_id)
 
-    db_train = BaseDataSets(base_dir=args.root_path, split="train", num=None, transform=transforms.Compose([
+    db_train = BaseDataSets1(base_dir=args.root_path, split="train", num=None, transform=transforms.Compose([
         RandomGenerator(args.patch_size)
     ]))
-    db_val = BaseDataSets(base_dir=args.root_path, split="val")
+    db_val = BaseDataSets1(base_dir=args.root_path, split="val")
 
-    total_slices = len(db_train)
-    labeled_slice = patients_to_slices(args.root_path, args.labeled_num)
+    # total_slices = len(db_train)
+    # labeled_slice = patients_to_slices(args.root_path, args.labeled_num)
+
+    total_slices = 2104
+    labeled_slice = 212
+
     print("Total silices is: {}, labeled slices is: {}".format(
         total_slices, labeled_slice))
     labeled_idxs = list(range(0, labeled_slice))
     unlabeled_idxs = list(range(labeled_slice, total_slices))
-    batch_sampler = TwoStreamBatchSampler(
-        labeled_idxs, unlabeled_idxs, batch_size, batch_size-args.labeled_bs)
+    batch_sampler = TwoStreamBatchSampler(labeled_idxs, unlabeled_idxs, batch_size, batch_size-args.labeled_bs)
 
     trainloader = DataLoader(db_train, batch_sampler=batch_sampler,
-                             num_workers=4, pin_memory=True, worker_init_fn=worker_init_fn)
+                             num_workers=0, pin_memory=True, worker_init_fn=worker_init_fn)
 
     model.train()
 
@@ -147,7 +150,7 @@ def train(args, snapshot_path):
     for epoch_num in iterator:
         for i_batch, sampled_batch in enumerate(trainloader):
 
-            volume_batch, label_batch = sampled_batch['image'], sampled_batch['label']
+            volume_batch, label_batch = sampled_batch['image'], sampled_batch['label3']
             volume_batch, label_batch = volume_batch.cuda(), label_batch.cuda()
             unlabeled_volume_batch = volume_batch[args.labeled_bs:]
 
@@ -205,39 +208,39 @@ def train(args, snapshot_path):
                 labs = label_batch[1, ...].unsqueeze(0) * 50
                 writer.add_image('train/GroundTruth', labs, iter_num)
 
-            if iter_num > 0 and iter_num % 200 == 0:
-                model.eval()
-                metric_list = 0.0
-                for i_batch, sampled_batch in enumerate(valloader):
-                    metric_i = test_single_volume(
-                        sampled_batch["image"], sampled_batch["label"], model, classes=num_classes)
-                    metric_list += np.array(metric_i)
-                metric_list = metric_list / len(db_val)
-                for class_i in range(num_classes-1):
-                    writer.add_scalar('info/val_{}_dice'.format(class_i+1),
-                                      metric_list[class_i, 0], iter_num)
-                    writer.add_scalar('info/val_{}_hd95'.format(class_i+1),
-                                      metric_list[class_i, 1], iter_num)
-
-                performance = np.mean(metric_list, axis=0)[0]
-
-                mean_hd95 = np.mean(metric_list, axis=0)[1]
-                writer.add_scalar('info/val_mean_dice', performance, iter_num)
-                writer.add_scalar('info/val_mean_hd95', mean_hd95, iter_num)
-
-                if performance > best_performance:
-                    best_performance = performance
-                    save_mode_path = os.path.join(snapshot_path,
-                                                  'iter_{}_dice_{}.pth'.format(
-                                                      iter_num, round(best_performance, 4)))
-                    save_best = os.path.join(snapshot_path,
-                                             '{}_best_model.pth'.format(args.model))
-                    torch.save(model.state_dict(), save_mode_path)
-                    torch.save(model.state_dict(), save_best)
-
-                logging.info(
-                    'iteration %d : mean_dice : %f mean_hd95 : %f' % (iter_num, performance, mean_hd95))
-                model.train()
+            # if iter_num > 0 and iter_num % 200 == 0:
+            #     model.eval()
+            #     metric_list = 0.0
+            #     for i_batch, sampled_batch in enumerate(valloader):
+            #         metric_i = test_single_volume(
+            #             sampled_batch["image"], sampled_batch["label"], model, classes=num_classes)
+            #         metric_list += np.array(metric_i)
+            #     metric_list = metric_list / len(db_val)
+            #     for class_i in range(num_classes-1):
+            #         writer.add_scalar('info/val_{}_dice'.format(class_i+1),
+            #                           metric_list[class_i, 0], iter_num)
+            #         writer.add_scalar('info/val_{}_hd95'.format(class_i+1),
+            #                           metric_list[class_i, 1], iter_num)
+            #
+            #     performance = np.mean(metric_list, axis=0)[0]
+            #
+            #     mean_hd95 = np.mean(metric_list, axis=0)[1]
+            #     writer.add_scalar('info/val_mean_dice', performance, iter_num)
+            #     writer.add_scalar('info/val_mean_hd95', mean_hd95, iter_num)
+            #
+            #     if performance > best_performance:
+            #         best_performance = performance
+            #         save_mode_path = os.path.join(snapshot_path,
+            #                                       'iter_{}_dice_{}.pth'.format(
+            #                                           iter_num, round(best_performance, 4)))
+            #         save_best = os.path.join(snapshot_path,
+            #                                  '{}_best_model.pth'.format(args.model))
+            #         torch.save(model.state_dict(), save_mode_path)
+            #         torch.save(model.state_dict(), save_best)
+            #
+            #     logging.info(
+            #         'iteration %d : mean_dice : %f mean_hd95 : %f' % (iter_num, performance, mean_hd95))
+            #     model.train()
 
             if iter_num % 3000 == 0:
                 save_mode_path = os.path.join(

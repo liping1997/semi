@@ -19,9 +19,9 @@ def conv1x1(in_planes, out_planes, stride=1):
 
 
 
-class FPN(nn.Module):
+class FPN2(nn.Module):
     def __init__(self):
-        super(FPN, self).__init__()
+        super(FPN2, self).__init__()
         self.inplanes = 64
 
         self.conv1 = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False)
@@ -54,10 +54,10 @@ class FPN(nn.Module):
         self.laterallayer4 = conv1x1( 64 ,64)
 
         # Final conv layers
-        self.finalconv1 = conv3x3(64, 3)
-        self.finalconv2 = conv3x3(64, 3)
-        self.finalconv3 = conv3x3(64, 3)
-        self.finalconv4 = conv3x3(64, 3)
+        self.finalconv1 = conv3x3(64, 4)
+        self.finalconv2 = conv3x3(64, 4)
+        self.finalconv3 = conv3x3(64, 4)
+        self.finalconv4 = conv3x3(64, 4)
 
 
 

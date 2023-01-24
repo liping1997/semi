@@ -36,7 +36,7 @@ from tqdm import tqdm
 
 from config import get_config
 from dataloaders import utils
-from dataloaders.dataset import (BaseDataSets1, RandomGenerator,
+from dataloaders.dataset import (BaseDataSets1, BaseDataSets2,RandomGenerator,
                                  TwoStreamBatchSampler)
 from networks.net_factory import net_factory
 from networks.vision_transformer import SwinUnet as ViT_seg
@@ -75,7 +75,7 @@ parser.add_argument('--root_path', type=str,
 parser.add_argument('--exp', type=str,
                     default='ACDC/Cross_Teaching_Between_CNN_Transformer', help='experiment_name')
 parser.add_argument('--model', type=str,
-                    default='fpn1', help='model_name')
+                    default='fpn2', help='model_name')
 parser.add_argument('--max_iterations', type=int,
                     default=30000, help='maximum epoch number to train')
 parser.add_argument('--batch_size', type=int, default=4,
@@ -87,7 +87,7 @@ parser.add_argument('--base_lr', type=float, default=0.01,
 parser.add_argument('--patch_size', type=list, default=[224, 224],
                     help='patch size of network input')
 parser.add_argument('--seed', type=int, default=1337, help='random seed')
-parser.add_argument('--num_classes', type=int, default=3,
+parser.add_argument('--num_classes', type=int, default=4,
                     help='output channel of network')
 parser.add_argument(
     '--cfg', type=str, default="../code/configs/swin_tiny_patch4_window7_224_lite.yaml", help='path to config file', )
@@ -204,16 +204,16 @@ def train(args, snapshot_path):
     def worker_init_fn(worker_id):
         random.seed(args.seed + worker_id)
 
-    db_train = BaseDataSets1(base_dir=args.root_path, split="train", num=None, transform=transforms.Compose([
+    db_train = BaseDataSets2(base_dir=args.root_path, split="train", num=None, transform=transforms.Compose([
         RandomGenerator(args.patch_size)
     ]))
-    db_val = BaseDataSets1(base_dir=args.root_path, split="val")
+    db_val = BaseDataSets2(base_dir=args.root_path, split="val")
 
-    # total_slices = len(db_train)
-    # labeled_slice = patients_to_slices(args.root_path, args.labeled_num)
+    total_slices = len(db_train)
+    labeled_slice = patients_to_slices(args.root_path, args.labeled_num)
 
-    total_slices = 2104
-    labeled_slice = 212
+    # total_slices = 2104
+    # labeled_slice = 212
     print("Total silices is: {}, labeled slices is: {}".format(
         total_slices, labeled_slice))
     labeled_idxs = list(range(0, labeled_slice))
@@ -261,44 +261,80 @@ def train(args, snapshot_path):
             outputs_soft1c = torch.softmax(outputs1c, dim=1)
             outputs_soft1d = torch.softmax(outputs1d, dim=1)
 
-            outputs2= model2(volume_batch)
-            outputs_soft2 = torch.softmax(outputs2, dim=1)
-
+            outputs2a, outputs2b, outputs2c, outputs2d = model2(volume_batch)
+            outputs_soft2a = torch.softmax(outputs2a, dim=1)
+            outputs_soft2b = torch.softmax(outputs2b, dim=1)
+            outputs_soft2c = torch.softmax(outputs2c, dim=1)
+            outputs_soft2d = torch.softmax(outputs2d, dim=1)
             consistency_weight = get_current_consistency_weight(
                 iter_num // 150)
 
-            loss2 =  (fce_loss(outputs2[:args.labeled_bs], label_batch3[:args.labeled_bs].long()) + dice_loss(
-                outputs_soft2[:args.labeled_bs], label_batch3[:args.labeled_bs].unsqueeze(1)))
+            loss2 = 0.1 * (ce_loss(outputs2c[:args.labeled_bs], label_batch2[:args.labeled_bs].long()) + dice_loss(
+                outputs_soft2c[:args.labeled_bs], label_batch2[:args.labeled_bs].unsqueeze(1))) \
+                + 0.1 * (
+                                ce_loss(outputs2b[:args.labeled_bs],
+                                         label_batch1[:args.labeled_bs].long()) + dice_loss(
+                            outputs_soft2b[:args.labeled_bs], label_batch1[:args.labeled_bs].unsqueeze(1))) + 0.1 * (
+                                ce_loss(outputs2a[:args.labeled_bs],
+                                         label_batch0[:args.labeled_bs].long()) + dice_loss(
+                            outputs_soft2a[:args.labeled_bs], label_batch0[:args.labeled_bs].unsqueeze(1))) + 0.7 * (
+                                ce_loss(outputs2d[:args.labeled_bs],
+                                         label_batch3[:args.labeled_bs].long()) + dice_loss(
+                            outputs_soft2d[:args.labeled_bs], label_batch3[:args.labeled_bs].unsqueeze(1)))
 
-            loss1 = 0.1 * (fce_loss(outputs1c[:args.labeled_bs], label_batch2[:args.labeled_bs].long()) + dice_loss(
-                outputs_soft1c[:args.labeled_bs], label_batch2[:args.labeled_bs].unsqueeze(1))) + 0.1 * (
-                                fce_loss(outputs1a[:args.labeled_bs],
+            loss1 = 0.1 * (ce_loss(outputs1c[:args.labeled_bs], label_batch2[:args.labeled_bs].long()) + dice_loss(
+                outputs_soft1c[:args.labeled_bs], label_batch2[:args.labeled_bs].unsqueeze(1))) \
+                + 0.1 * (ce_loss(outputs1a[:args.labeled_bs],
                                          label_batch0[:args.labeled_bs].long()) + dice_loss(
                             outputs_soft1a[:args.labeled_bs], label_batch0[:args.labeled_bs].unsqueeze(1))) + 0.1 * (
-                                fce_loss(outputs1b[:args.labeled_bs],
+                                ce_loss(outputs1b[:args.labeled_bs],
                                          label_batch1[:args.labeled_bs].long()) + dice_loss(
                             outputs_soft1b[:args.labeled_bs], label_batch1[:args.labeled_bs].unsqueeze(1))) + 0.7 * (
-                                fce_loss(outputs1d[:args.labeled_bs],
+                                ce_loss(outputs1d[:args.labeled_bs],
                                          label_batch3[:args.labeled_bs].long()) + dice_loss(
                             outputs_soft1d[:args.labeled_bs], label_batch3[:args.labeled_bs].unsqueeze(1)))
 
-
-
+            pseudo_outputs1a = torch.argmax(
+                outputs_soft1a[args.labeled_bs:].detach(), dim=1, keepdim=False)
+            pseudo_outputs2a = torch.argmax(
+                outputs_soft2a[args.labeled_bs:].detach(), dim=1, keepdim=False)
+            pseudo_outputs1b = torch.argmax(
+                outputs_soft1b[args.labeled_bs:].detach(), dim=1, keepdim=False)
+            pseudo_outputs2b = torch.argmax(
+                outputs_soft2b[args.labeled_bs:].detach(), dim=1, keepdim=False)
+            pseudo_outputs1c = torch.argmax(
+                outputs_soft1c[args.labeled_bs:].detach(), dim=1, keepdim=False)
+            pseudo_outputs2c = torch.argmax(
+                outputs_soft2c[args.labeled_bs:].detach(), dim=1, keepdim=False)
             pseudo_outputs1d = torch.argmax(
                 outputs_soft1d[args.labeled_bs:].detach(), dim=1, keepdim=False)
-            pseudo_outputs2 = torch.argmax(
-                outputs_soft2[args.labeled_bs:].detach(), dim=1, keepdim=False)
+            pseudo_outputs2d = torch.argmax(
+                outputs_soft2d[args.labeled_bs:].detach(), dim=1, keepdim=False)
 
+            pseudo_supervision1a = dice_loss(
+                outputs_soft1a[args.labeled_bs:], pseudo_outputs2a.unsqueeze(1))
+            pseudo_supervision2a = dice_loss(
+                outputs_soft2a[args.labeled_bs:], pseudo_outputs1a.unsqueeze(1))
+
+            pseudo_supervision1b = dice_loss(
+                outputs_soft1b[args.labeled_bs:], pseudo_outputs2b.unsqueeze(1))
+            pseudo_supervision2b = dice_loss(
+                outputs_soft2b[args.labeled_bs:], pseudo_outputs1b.unsqueeze(1))
+
+            pseudo_supervision1c = dice_loss(
+                outputs_soft1c[args.labeled_bs:], pseudo_outputs2c.unsqueeze(1))
+            pseudo_supervision2c = dice_loss(
+                outputs_soft2c[args.labeled_bs:], pseudo_outputs1c.unsqueeze(1))
 
             pseudo_supervision1d = dice_loss(
-                outputs_soft1d[args.labeled_bs:], pseudo_outputs2.unsqueeze(1))
-            pseudo_supervision2 = dice_loss(
-                outputs_soft2[args.labeled_bs:], pseudo_outputs1d.unsqueeze(1))
+                outputs_soft1d[args.labeled_bs:], pseudo_outputs2d.unsqueeze(1))
+            pseudo_supervision2d = dice_loss(
+                outputs_soft2d[args.labeled_bs:], pseudo_outputs1d.unsqueeze(1))
 
-
-
-            model1_loss = loss1  + consistency_weight * pseudo_supervision1d
-            model2_loss = loss2 + consistency_weight * pseudo_supervision2
+            model1_loss = loss1 + consistency_weight * (
+                        pseudo_supervision1a + pseudo_supervision1b + pseudo_supervision1c + pseudo_supervision1d)
+            model2_loss = loss2 + consistency_weight * (
+                        pseudo_supervision2a + pseudo_supervision2c + pseudo_supervision2b + pseudo_supervision2d)
 
             loss = model1_loss + model2_loss
 
@@ -331,88 +367,88 @@ def train(args, snapshot_path):
             if iter_num % 50 == 0:
                 image = volume_batch[1, 0:1, :, :]
                 writer.add_image('train/Image', image, iter_num)
-                outputs = torch.argmax(torch.softmax(
+                outputs1 = torch.argmax(torch.softmax(
                     outputs1d, dim=1), dim=1, keepdim=True)
                 writer.add_image('train/model1_Prediction',
-                                 outputs[1, ...] * 50, iter_num)
-                outputs = torch.argmax(torch.softmax(
-                    outputs2, dim=1), dim=1, keepdim=True)
+                                 outputs1[1, ...] * 50, iter_num)
+                outputs2 = torch.argmax(torch.softmax(
+                    outputs2d, dim=1), dim=1, keepdim=True)
                 writer.add_image('train/model2_Prediction',
-                                 outputs[1, ...] * 50, iter_num)
+                                 outputs2[1, ...] * 50, iter_num)
                 labs = label_batch3[1, ...].unsqueeze(0) * 50
                 writer.add_image('train/GroundTruth', labs, iter_num)
 
-            # if iter_num > 0 and iter_num % 200 == 0:
-            #     model1.eval()
-            #     metric_list = 0.0
-            #     for i_batch, sampled_batch in enumerate(valloader):
-            #         metric_i = test_single_volume(
-            #             sampled_batch["image"], sampled_batch["label3"], model1, classes=num_classes, patch_size=args.patch_size)
-            #         metric_list += np.array(metric_i)
-            #     metric_list = metric_list / len(db_val)
-            #     for class_i in range(num_classes-1):
-            #         writer.add_scalar('info/model1_val_{}_dice'.format(class_i+1),
-            #                           metric_list[class_i, 0], iter_num)
-            #         writer.add_scalar('info/model1_val_{}_hd95'.format(class_i+1),
-            #                           metric_list[class_i, 1], iter_num)
-            #
-            #     performance1 = np.mean(metric_list, axis=0)[0]
-            #
-            #     mean_hd951 = np.mean(metric_list, axis=0)[1]
-            #     writer.add_scalar('info/model1_val_mean_dice',
-            #                       performance1, iter_num)
-            #     writer.add_scalar('info/model1_val_mean_hd95',
-            #                       mean_hd951, iter_num)
-            #
-            #     if performance1 > best_performance1:
-            #         best_performance1 = performance1
-            #         save_mode_path = os.path.join(snapshot_path,
-            #                                       'model1_iter_{}_dice_{}.pth'.format(
-            #                                           iter_num, round(best_performance1, 4)))
-            #         save_best = os.path.join(snapshot_path,
-            #                                  '{}_best_model1.pth'.format(args.model))
-            #         torch.save(model1.state_dict(), save_mode_path)
-            #         torch.save(model1.state_dict(), save_best)
-            #
-            #     logging.info(
-            #         'iteration %d : model1_mean_dice : %f model1_mean_hd95 : %f' % (iter_num, performance1, mean_hd951))
-            #     model1.train()
-            #
-            #     model2.eval()
-            #     metric_list = 0.0
-            #     for i_batch, sampled_batch in enumerate(valloader):
-            #         metric_i = test_single_volume(
-            #             sampled_batch["image"], sampled_batch["label3"
-            #                                                   ""], model2, classes=num_classes, patch_size=args.patch_size)
-            #         metric_list += np.array(metric_i)
-            #     metric_list = metric_list / len(db_val)
-            #     for class_i in range(num_classes-1):
-            #         writer.add_scalar('info/model2_val_{}_dice'.format(class_i+1),
-            #                           metric_list[class_i, 0], iter_num)
-            #         writer.add_scalar('info/model2_val_{}_hd95'.format(class_i+1),
-            #                           metric_list[class_i, 1], iter_num)
-            #
-            #     performance2 = np.mean(metric_list, axis=0)[0]
-            #
-            #     mean_hd952 = np.mean(metric_list, axis=0)[1]
-            #     writer.add_scalar('info/model2_val_mean_dice',
-            #                       performance2, iter_num)
-            #     writer.add_scalar('info/model2_val_mean_hd95',
-            #                       mean_hd952, iter_num)
-            #
-            #     if performance2 > best_performance2:
-            #         best_performance2 = performance2
-            #         save_mode_path = os.path.join(snapshot_path,
-            #                                       'model2_iter_{}_dice_{}.pth'.format(
-            #                                           iter_num, round(best_performance2, 4)))
-            #         save_best = os.path.join(snapshot_path,
-            #                                  '{}_best_model2.pth'.format(args.model))
-            #         torch.save(model2.state_dict(), save_mode_path)
-            #         torch.save(model2.state_dict(), save_best)
-            #
-            #     logging.info(
-            #         'iteration %d : model2_mean_dice : %f model2_mean_hd95 : %f' % (iter_num, performance2, mean_hd952))
-            #     model2.train()
+            if iter_num > 0 and iter_num % 200 == 0:
+                model1.eval()
+                metric_list = 0.0
+                for i_batch, sampled_batch in enumerate(valloader):
+                    metric_i = test_single_volume(
+                        sampled_batch["image"], sampled_batch["label3"], model1, classes=num_classes, patch_size=args.patch_size)
+                    metric_list += np.array(metric_i)
+                metric_list = metric_list / len(db_val)
+                for class_i in range(num_classes-1):
+                    writer.add_scalar('info/model1_val_{}_dice'.format(class_i+1),
+                                      metric_list[class_i, 0], iter_num)
+                    writer.add_scalar('info/model1_val_{}_hd95'.format(class_i+1),
+                                      metric_list[class_i, 1], iter_num)
+
+                performance1 = np.mean(metric_list, axis=0)[0]
+
+                mean_hd951 = np.mean(metric_list, axis=0)[1]
+                writer.add_scalar('info/model1_val_mean_dice',
+                                  performance1, iter_num)
+                writer.add_scalar('info/model1_val_mean_hd95',
+                                  mean_hd951, iter_num)
+
+                if performance1 > best_performance1:
+                    best_performance1 = performance1
+                    save_mode_path = os.path.join(snapshot_path,
+                                                  'model1_iter_{}_dice_{}.pth'.format(
+                                                      iter_num, round(best_performance1, 4)))
+                    save_best = os.path.join(snapshot_path,
+                                             '{}_best_model1.pth'.format(args.model))
+                    torch.save(model1.state_dict(), save_mode_path)
+                    torch.save(model1.state_dict(), save_best)
+
+                logging.info(
+                    'iteration %d : model1_mean_dice : %f model1_mean_hd95 : %f' % (iter_num, performance1, mean_hd951))
+                model1.train()
+
+                model2.eval()
+                metric_list = 0.0
+                for i_batch, sampled_batch in enumerate(valloader):
+                    metric_i = test_single_volume(
+                        sampled_batch["image"], sampled_batch["label3"
+                                                              ""], model2, classes=num_classes, patch_size=args.patch_size)
+                    metric_list += np.array(metric_i)
+                metric_list = metric_list / len(db_val)
+                for class_i in range(num_classes-1):
+                    writer.add_scalar('info/model2_val_{}_dice'.format(class_i+1),
+                                      metric_list[class_i, 0], iter_num)
+                    writer.add_scalar('info/model2_val_{}_hd95'.format(class_i+1),
+                                      metric_list[class_i, 1], iter_num)
+
+                performance2 = np.mean(metric_list, axis=0)[0]
+
+                mean_hd952 = np.mean(metric_list, axis=0)[1]
+                writer.add_scalar('info/model2_val_mean_dice',
+                                  performance2, iter_num)
+                writer.add_scalar('info/model2_val_mean_hd95',
+                                  mean_hd952, iter_num)
+
+                if performance2 > best_performance2:
+                    best_performance2 = performance2
+                    save_mode_path = os.path.join(snapshot_path,
+                                                  'model2_iter_{}_dice_{}.pth'.format(
+                                                      iter_num, round(best_performance2, 4)))
+                    save_best = os.path.join(snapshot_path,
+                                             '{}_best_model2.pth'.format(args.model))
+                    torch.save(model2.state_dict(), save_mode_path)
+                    torch.save(model2.state_dict(), save_best)
+
+                logging.info(
+                    'iteration %d : model2_mean_dice : %f model2_mean_hd95 : %f' % (iter_num, performance2, mean_hd952))
+                model2.train()
 
             if iter_num % 3000 == 0:
                 save_mode_path = os.path.join(
